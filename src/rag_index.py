@@ -481,18 +481,11 @@ class SchemaRAG:
             )
 
 
-        context_parts = []
-
-
-        for result in results:
-
-            context_parts.append(
-                f"{result['text']}\n"
-                f"Hybrid relevance: "
-                f"{result['score']:.3f}"
-            )
-
-
-        return "\n\n".join(
-            context_parts
+        # The relevance score is a retrieval diagnostic, not
+        # information the SQL writer can use - it was costing
+        # tokens on every call and saying nothing. Scores stay
+        # available via search() for debugging.
+        return "\n".join(
+            result["text"]
+            for result in results
         )

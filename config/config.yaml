@@ -1,0 +1,48 @@
+project:
+  name: "Autonomous BI Agent"
+  version: "1.0.0"
+
+database:
+  path: "data/northwind.db"
+
+groq:
+  model: "openai/gpt-oss-20b"
+  temperature: 0
+  # A SELECT plus this model's reasoning tokens runs ~350;
+  # 1024 leaves headroom while bounding a runaway generation.
+  # Do not set this too low: gpt-oss-20b spends the budget on
+  # reasoning first and returns an EMPTY string if it runs out.
+  max_completion_tokens: 1024
+  # Asking for exact percentages made the model reason harder
+  # before writing; at 900 two summaries exhausted the budget
+  # on reasoning and came back EMPTY. Headroom matters more
+  # than the cap here - you are billed for what is generated,
+  # not for the ceiling.
+  summary_max_tokens: 2000
+  # The summary does arithmetic on a handful of numbers; it
+  # does not need deep deliberation. Low effort cut completion
+  # tokens ~74% in testing and stops reasoning from eating the
+  # whole budget and returning an empty string.
+  summary_reasoning_effort: "low"
+  # Groq's free tier caps tokens-per-minute; retry rather than
+  # surfacing a 429 to the user.
+  api_max_retries: 5
+
+rag:
+  top_k: 5
+
+agent:
+  max_rows: 1000
+  # Failed queries are re-sent once with the sqlite error.
+  max_repairs: 1
+  # Repeat questions reuse their SQL instead of calling the
+  # model again. The query itself still re-runs.
+  cache_size: 128
+
+dashboard:
+  max_chart_rows: 20
+  # "categorical" = a distinct validated hue per bar (more
+  # colourful); "emphasis" = leader accented, rest recessive.
+  # Past 8 bars categorical falls back to emphasis rather than
+  # cycling hues and repeating a colour.
+  color_mode: "categorical"

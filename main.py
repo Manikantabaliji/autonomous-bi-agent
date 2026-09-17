@@ -1,3 +1,6 @@
+import yaml
+from pathlib import Path
+
 from src.sql_agent import SQLAgent
 from src.dashboard_generator import DashboardGenerator
 from src.summary_generator import SummaryGenerator
@@ -12,11 +15,19 @@ class AutonomousBIAgent:
     def __init__(self):
         self.sql_agent = SQLAgent()
         self.summary_generator = SummaryGenerator()
+        config = yaml.safe_load(
+            (
+                Path(__file__).resolve().parent
+                / "config" / "config.yaml"
+            ).read_text(encoding="utf-8")
+        )["dashboard"]
+
         self.dashboard_generator = DashboardGenerator(
-            max_chart_rows=20
+            max_chart_rows=config.get("max_chart_rows", 20),
+            color_mode=config.get("color_mode", "categorical"),
         )
 
-    def analyze(self, question: str):
+    def analyze(self, question: str, on_step=None):
         """
         Complete BI analysis pipeline:
 
@@ -31,6 +42,11 @@ class AutonomousBIAgent:
         Dashboard Generation
             ↓
         Executive Summary
+
+        `on_step` is an optional callable invoked with a short
+        label before each stage, so a caller can report
+        progress. Orchestration stays here; the UI only
+        observes.
         """
 
         if not question or not question.strip():
@@ -38,9 +54,15 @@ class AutonomousBIAgent:
                 "Question cannot be empty."
             )
 
+        def report(label):
+            if on_step is not None:
+                on_step(label)
+
         # --------------------------------------------------
         # STEP 1: Generate SQL and execute query
         # --------------------------------------------------
+        report("Retrieving schema and writing SQL")
+
         result = self.sql_agent.run(question)
 
         sql = result["sql"]
@@ -49,6 +71,8 @@ class AutonomousBIAgent:
         # --------------------------------------------------
         # STEP 2: Generate executive summary
         # --------------------------------------------------
+        report("Summarising the result")
+
         summary = self.summary_generator.generate(
             question=question,
             sql=sql,
@@ -58,6 +82,8 @@ class AutonomousBIAgent:
         # --------------------------------------------------
         # STEP 3: Generate visualization
         # --------------------------------------------------
+        report("Building the visualisation")
+
         chart = self.dashboard_generator.create_chart(
             dataframe
         )

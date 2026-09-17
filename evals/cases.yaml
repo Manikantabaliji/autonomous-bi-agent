@@ -1,0 +1,128 @@
+# ============================================================
+# EVALUATION CASES
+#
+# Each case pairs a natural-language question with reference
+# SQL written by hand. Grading compares RESULTS, never query
+# text: there are many correct ways to write each of these.
+#
+# Reference SQL is executed against the same database at eval
+# time, so expected values are never hard-coded and the suite
+# survives the data changing.
+#
+# mode:
+#   scalar  - one number; compared with tolerance
+#   ranked  - ordered labels; order is part of the answer
+#   set     - same rows, order irrelevant
+# ============================================================
+
+- id: count_customers
+  question: How many customers are there?
+  mode: scalar
+  sql: SELECT COUNT(*) FROM Customers;
+
+- id: count_products
+  question: How many products do we sell?
+  mode: scalar
+  sql: SELECT COUNT(*) FROM Products;
+
+- id: count_orders
+  question: How many orders have been placed in total?
+  mode: scalar
+  sql: SELECT COUNT(*) FROM Orders;
+
+- id: top5_products_revenue
+  question: What are the top 5 products by total sales?
+  mode: ranked
+  limit: 5
+  sql: |
+    SELECT p.ProductName,
+           SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)) AS Revenue
+    FROM "Order Details" od
+    JOIN Products p ON p.ProductID = od.ProductID
+    GROUP BY p.ProductID, p.ProductName
+    ORDER BY Revenue DESC
+    LIMIT 5;
+
+- id: top5_countries_revenue
+  question: Which 5 countries generate the most revenue?
+  mode: ranked
+  limit: 5
+  sql: |
+    SELECT o.ShipCountry,
+           SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)) AS Revenue
+    FROM Orders o
+    JOIN "Order Details" od ON o.OrderID = od.OrderID
+    GROUP BY o.ShipCountry
+    ORDER BY Revenue DESC
+    LIMIT 5;
+
+- id: top3_customers_revenue
+  question: What are the top 3 customers by total sales?
+  mode: ranked
+  limit: 3
+  sql: |
+    SELECT c.CompanyName,
+           SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)) AS Revenue
+    FROM Customers c
+    JOIN Orders o ON o.CustomerID = c.CustomerID
+    JOIN "Order Details" od ON od.OrderID = o.OrderID
+    GROUP BY c.CustomerID, c.CompanyName
+    ORDER BY Revenue DESC
+    LIMIT 3;
+
+- id: top_employee_orders
+  question: Which employee handled the most orders?
+  mode: ranked
+  limit: 1
+  sql: |
+    SELECT e.LastName, COUNT(*) AS OrderCount
+    FROM Orders o
+    JOIN Employees e ON e.EmployeeID = o.EmployeeID
+    GROUP BY e.EmployeeID, e.LastName
+    ORDER BY OrderCount DESC
+    LIMIT 1;
+
+- id: avg_freight_by_shipper
+  question: What is the average freight cost per shipping company?
+  mode: set
+  sql: |
+    SELECT s.CompanyName, AVG(o.Freight) AS AvgFreight
+    FROM Orders o
+    JOIN Shippers s ON s.ShipperID = o.ShipVia
+    GROUP BY s.ShipperID, s.CompanyName;
+
+- id: customers_per_country
+  question: How many customers are in each country?
+  mode: set
+  sql: |
+    SELECT Country, COUNT(*) AS CustomerCount
+    FROM Customers
+    GROUP BY Country;
+
+- id: products_per_category
+  question: How many products are in each category?
+  mode: set
+  sql: |
+    SELECT c.CategoryName, COUNT(*) AS ProductCount
+    FROM Products p
+    JOIN Categories c ON c.CategoryID = p.CategoryID
+    GROUP BY c.CategoryID, c.CategoryName;
+
+- id: discontinued_products
+  question: How many products are discontinued?
+  mode: scalar
+  sql: SELECT COUNT(*) FROM Products WHERE Discontinued = 1;
+
+- id: top3_categories_revenue
+  question: Which 3 categories generate the most revenue?
+  mode: ranked
+  limit: 3
+  sql: |
+    SELECT c.CategoryName,
+           SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)) AS Revenue
+    FROM "Order Details" od
+    JOIN Products p ON p.ProductID = od.ProductID
+    JOIN Categories c ON c.CategoryID = p.CategoryID
+    GROUP BY c.CategoryID, c.CategoryName
+    ORDER BY Revenue DESC
+    LIMIT 3;

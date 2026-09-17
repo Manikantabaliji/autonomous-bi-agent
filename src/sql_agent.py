@@ -1,5 +1,6 @@
 import os
 import re
+from collections import OrderedDict
 from pathlib import Path
 
 import yaml
@@ -36,6 +37,64 @@ with open(
 
 
 # ============================================================
+# PROMPTS
+#
+# The old prompt carried 21 numbered rules. Eight of them
+# ("never INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/PRAGMA") are
+# enforced deterministically by validate_sql() and by the
+# read-only connection, and four more restated "return only
+# SQL" in different words - roughly 180 tokens per call spent
+# on instructions that either could not be trusted for safety
+# anyway or were already said.
+#
+# What replaces them is guidance the code CANNOT enforce: the
+# Northwind-specific traps that produce confidently wrong
+# answers.
+# ============================================================
+
+SQL_PROMPT = """\
+Convert the business question into ONE SQLite SELECT query.
+
+SCHEMA:
+{schema}
+
+QUESTION:
+{question}
+
+RULES:
+- Output the SQL only: no markdown, no commentary.
+- Use only the tables and columns listed above.
+- JOIN, GROUP BY and ORDER BY as the question requires;
+  LIMIT for top-N.
+- "Order Details" contains a space - always double-quote it.
+- Revenue/sales = SUM(od.UnitPrice * od.Quantity *
+  (1 - od.Discount)) from "Order Details" od. Use that table's
+  UnitPrice (the price actually charged), never Products.UnitPrice.
+- When ranking entities, select the entity's name, not only
+  its ID, so the result is readable.
+"""
+
+REPAIR_PROMPT = """\
+This SQLite query failed.
+
+QUESTION IT MUST ANSWER:
+{question}
+
+QUERY:
+{sql}
+
+ERROR:
+{error}
+
+SCHEMA:
+{schema}
+
+Return the corrected SQL only. Use only the columns listed,
+and make sure it still answers the question above.
+"""
+
+
+# ============================================================
 # SQL AGENT
 # ============================================================
 
@@ -61,7 +120,8 @@ class SQLAgent:
         # ----------------------------------------------------
 
         self.client = Groq(
-            api_key=api_key
+            api_key=api_key,
+            max_retries=CONFIG["groq"].get("api_max_retries", 5),
         )
 
 
@@ -77,6 +137,19 @@ class SQLAgent:
 
         self.max_rows = CONFIG["agent"]["max_rows"]
 
+        self.max_repairs = CONFIG["agent"].get(
+            "max_repairs", 1
+        )
+
+        # question -> working SQL. Only the generation step is
+        # cached; the query is always re-executed, so results
+        # never go stale.
+        self.cache_size = CONFIG["agent"].get(
+            "cache_size", 128
+        )
+
+        self._sql_cache = OrderedDict()
+
 
         # ----------------------------------------------------
         # Initialize RAG
@@ -91,76 +164,11 @@ class SQLAgent:
     # GENERATE SQL
     # ========================================================
 
-    def generate_sql(
-        self,
-        question: str
-    ):
-
-        # ----------------------------------------------------
-        # Retrieve relevant schema
-        # ----------------------------------------------------
-
-        schema_context = self.rag.get_context(
-            question
-        )
-
-
-        # ----------------------------------------------------
-        # Prompt
-        # ----------------------------------------------------
-
-        prompt = f"""
-You are an expert Business Intelligence
-SQL analyst.
-
-You work with a SQLite Northwind database.
-
-Your job is to convert the user's business
-question into ONE valid SQLite SQL query.
-
-RELEVANT DATABASE SCHEMA:
-
-{schema_context}
-
-
-USER QUESTION:
-
-{question}
-
-
-STRICT RULES:
-
-1. Return ONLY SQL.
-2. Do not use markdown.
-3. Generate exactly one SQL statement.
-4. Only SELECT or WITH queries are allowed.
-5. Never modify the database.
-6. Never use INSERT.
-7. Never use UPDATE.
-8. Never use DELETE.
-9. Never use DROP.
-10. Never use ALTER.
-11. Never use CREATE.
-12. Never use PRAGMA.
-13. Use only tables and columns provided
-    in the database schema.
-14. Use SQLite-compatible SQL.
-15. Use JOIN when information comes
-    from multiple tables.
-16. Use GROUP BY when required.
-17. Use ORDER BY for ranking.
-18. Use LIMIT for top-N questions.
-19. Never invent columns.
-20. Do not explain the SQL.
-21. Return only the SQL query.
-
-Return ONLY the SQL.
-"""
-
-
-        # ----------------------------------------------------
-        # Call Groq
-        # ----------------------------------------------------
+    def _complete(self, prompt: str):
+        """
+        One Groq round-trip returning cleaned SQL.
+        Shared by first-pass generation and repair.
+        """
 
         response = (
             self.client
@@ -191,11 +199,6 @@ Return ONLY the SQL.
             )
         )
 
-
-        # ----------------------------------------------------
-        # Get response
-        # ----------------------------------------------------
-
         content = (
             response
             .choices[0]
@@ -203,27 +206,30 @@ Return ONLY the SQL.
             .content
         )
 
-
         if not content:
 
             raise ValueError(
                 "Groq returned an empty SQL response."
             )
 
+        return self.clean_sql(content.strip())
 
-        sql = content.strip()
 
+    def generate_sql(
+        self,
+        question: str
+    ):
 
-        # ----------------------------------------------------
-        # Clean markdown if model adds it
-        # ----------------------------------------------------
-
-        sql = self.clean_sql(
-            sql
+        schema_context = self.rag.get_context(
+            question
         )
 
-
-        return sql
+        return self._complete(
+            SQL_PROMPT.format(
+                schema=schema_context,
+                question=question,
+            )
+        )
 
 
     # ========================================================
@@ -331,6 +337,21 @@ Return ONLY the SQL.
 
 
     # ========================================================
+    # SQL CACHE
+    # ========================================================
+
+    def _remember(self, key, sql):
+        """Store working SQL, evicting the oldest entry."""
+
+        self._sql_cache[key] = sql
+
+        self._sql_cache.move_to_end(key)
+
+        while len(self._sql_cache) > self.cache_size:
+            self._sql_cache.popitem(last=False)
+
+
+    # ========================================================
     # RUN COMPLETE SQL AGENT
     # ========================================================
 
@@ -347,30 +368,71 @@ Return ONLY the SQL.
 
 
         # ----------------------------------------------------
-        # 1. Generate SQL
+        # 1. Retrieve schema once and reuse it
         # ----------------------------------------------------
 
-        sql = self.generate_sql(
+        schema_context = self.rag.get_context(
             question
         )
 
 
         # ----------------------------------------------------
-        # 2. Validate SQL
+        # 2. Generate, validate, execute - repairing once if
+        #    the query fails.
+        #
+        #    A wrong column name used to surface to the user as
+        #    a raw sqlite error. Feeding that error back with
+        #    the schema recovers most of those, and costs extra
+        #    tokens only on the runs that would have failed.
         # ----------------------------------------------------
 
-        self.validate_sql(
-            sql
-        )
+        cache_key = question.strip().lower()
 
+        cached = self._sql_cache.get(cache_key)
 
-        # ----------------------------------------------------
-        # 3. Execute SQL
-        # ----------------------------------------------------
+        if cached is not None:
 
-        dataframe = execute_query(
-            sql
-        )
+            # Re-executed below, so the data is still fresh.
+            self._sql_cache.move_to_end(cache_key)
+
+            sql = cached
+
+        else:
+
+            sql = self._complete(
+                SQL_PROMPT.format(
+                    schema=schema_context,
+                    question=question,
+                )
+            )
+
+        attempts = self.max_repairs + 1
+
+        for attempt in range(attempts):
+
+            try:
+
+                self.validate_sql(sql)
+
+                dataframe = execute_query(sql)
+
+                self._remember(cache_key, sql)
+
+                break
+
+            except Exception as error:
+
+                if attempt == attempts - 1:
+                    raise
+
+                sql = self._complete(
+                    REPAIR_PROMPT.format(
+                        question=question,
+                        sql=sql,
+                        error=error,
+                        schema=schema_context,
+                    )
+                )
 
 
         # ----------------------------------------------------

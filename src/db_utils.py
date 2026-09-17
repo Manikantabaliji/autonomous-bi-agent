@@ -20,6 +20,11 @@ DB_PATH = PROJECT_ROOT / "data" / "northwind.db"
 def get_connection():
     """
     Create a connection to the Northwind SQLite database.
+
+    Opened in SQLite's own read-only mode, so a write is
+    refused by the driver rather than only by our keyword
+    checks. That makes "read-only" a property of the
+    connection instead of a promise made in a prompt.
     """
 
     if not DB_PATH.exists():
@@ -27,7 +32,10 @@ def get_connection():
             f"Northwind database not found at: {DB_PATH}"
         )
 
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(
+        f"{DB_PATH.as_uri()}?mode=ro",
+        uri=True,
+    )
 
 
 # ============================================================

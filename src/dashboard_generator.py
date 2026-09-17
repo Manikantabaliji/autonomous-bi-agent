@@ -11,40 +11,49 @@ import plotly.express as px
 # for colour-vision deficiency against surface #161a21.
 # ============================================================
 
-SURFACE = "#161a21"
-GRID = "#252b36"
-TEXT_PRIMARY = "#e8eaed"
-TEXT_SECONDARY = "#9aa3b2"
-TEXT_MUTED = "#6b7482"
+# Light theme, matching the interface.
+SURFACE = "#FFFFFF"
+PLOT_BG = "#F8FAFC"
+GRID = "#E5E7EB"
+AXIS_LINE = "#D1D5DB"
+TEXT_PRIMARY = "#111827"
+TEXT_SECONDARY = "#4B5563"
+TEXT_MUTED = "#6B7280"
 
+# Palette carried over from the shared UI work. The hues are
+# unchanged; the ORDER was adjusted because emerald sat next to
+# cyan, a pair only 12.5 dE apart - below the 15 floor, so
+# neighbouring bars were hard to tell apart even with normal
+# colour vision. Swapping amber and emerald (and moving teal
+# away from pink) clears every gate on the adjacent pairlist
+# against surface #F8FAFC.
 SERIES = [
-    "#3987e5",  # blue
-    "#d95926",  # orange
-    "#199e70",  # aqua
-    "#c98500",  # yellow
-    "#d55181",  # magenta
-    "#008300",  # green
-    "#9085e9",  # violet
-    "#e66767",  # red
+    "#4F46E5",  # indigo
+    "#06B6D4",  # cyan
+    "#F59E0B",  # amber
+    "#10B981",  # emerald
+    "#EF4444",  # red
+    "#14B8A6",  # teal
+    "#8B5CF6",  # purple
+    "#EC4899",  # pink
 ]
 
 # Two ways to colour a ranked bar chart:
 #
 #   "categorical" - each bar takes the next hue from SERIES, in
 #     fixed order. More colourful, and the eight slots are
-#     validated for colour-vision deficiency on adjacent pairs
-#     against surface #161a21. The honest caveat: on a ranking,
-#     length already carries the story, so hue here is
-#     decoration rather than information.
+#     validated for colour-vision deficiency on adjacent pairs.
+#     The honest caveat: on a ranking, length already carries
+#     the story, so hue here is decoration, not information.
 #
-#   "emphasis" - leader in full accent, the rest a darker step
+#   "emphasis" - leader in the accent, the rest a lighter tint
 #     of the same hue. Quieter, and hue means something.
 #
 # Beyond eight bars categorical falls back to emphasis: cycling
-# a palette would make two different bars share a colour, which
-# is worse than not colouring them at all.
-SERIES_LEAD = "#3987e5"
-SERIES_REST = "#256abf"
+# the palette would give two different bars the same colour,
+# which is worse than not colouring them at all.
+SERIES_LEAD = "#4F46E5"
+SERIES_REST = "#A5B4FC"
 
 MAX_CATEGORICAL = len(SERIES)
 
@@ -331,13 +340,13 @@ class DashboardGenerator:
                 size=12,
                 color=TEXT_SECONDARY,
             ),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor=SURFACE,
+            plot_bgcolor=PLOT_BG,
             margin=dict(l=8, r=24, t=52, b=8),
             showlegend=False,
             hoverlabel=dict(
                 bgcolor=SURFACE,
-                bordercolor=GRID,
+                bordercolor=AXIS_LINE,
                 font=dict(
                     family=FONT_STACK,
                     size=12,
